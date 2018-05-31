@@ -1,0 +1,146 @@
+---
+title: "End Project Week 4"
+author: "Olga Hartoog"
+date: "May 31st 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+In this project we are going to predict how well people did a physical excercise of lifting a dumbbell by data from accelerometers on the belt, forearm, arm and dumbbell. The participants where asked to perform dumbbell lifts correctly and incorrectly in 5 different ways: exactly according to the specification (class A), throwing the elbows to the front (class B), lifting the dumbbell only halfway (class C), lowering the dumbbell only halfway (class D) and throwing the hips to the front (cClass E). 
+
+The goal is to predict the manner in which they did the excercise by the use of machine learning. 
+
+
+## Getting and cleaning data
+First a couple of packages is activated.
+```{r package, warning=FALSE, message=FALSE}
+library(caret)
+library(e1071)
+library(class)
+library(randomForest)
+library(data.table)
+library(knitr)
+```
+
+We download the data set, and transform the dependent variable `classe` to a factor.
+```{r download, cache=TRUE}
+training <- read.csv('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv')
+testing  <- read.csv('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv')
+
+training$classe <- as.factor(training$classe)
+table(training$classe)
+```
+There could be NAs in our data set. The following command will show the sum of NAs for each column. 
+
+```{r nas}
+colSums(is.na(training))
+```
+Given that the data set is only 19622 rows, there seems to be number of columns that only have a few percent filling. Let's remove these columns.
+
+```{r removena}
+training2 <- training[,colSums(is.na(training))<19216]
+```
+There are also factor variables in our data set, some of which are mainly filled with an empty string. We will also remove these variables. Furthermore the first 7 columns contain information about user, time etc. and we don't want to take these into account.
+
+```{r emptystring}
+colSums(training2=='')
+training3 <- training2[,colSums(training2=="")<19216]
+training_fin <- training3[,-(1:7)]
+```
+The resulting data set is left with 60 columns, all of which are complete.
+```{r anyna}
+anyNA(training_fin)
+dim(training_fin)
+```
+```{r cleanup, echo=FALSE}
+# clean up
+rm(training,training2)
+
+```
+
+## Modeling
+### Model type selection
+We are going to explore this classification problem with six different machine learning methods. To get an idea of the accuracy of every method given this data set, we will use 10-fold cross validation. Accuracy is a good success criterium for this problem, as the outcomes (unordered classes) in the data set are symmetric (i.e. predicting class X when it should be Y is equally undesirable as the other way around). We will investigate the following machine learning algoritms:
+
+- Naive Bayes
+- Support Vector Machines
+- Decision Tree
+- Random Forest
+- Gradient Boosting
+- K Nearest Neighbour
+
+Using the ```caret``` package, we initialize the modeling. We split the training data set again in another subtrain and subtest set, in order to calculate the out-of-sample error via 10-fold cross validation.
+```{r modprep}
+train_control     <- trainControl(method="cv", number=10, savePredictions = TRUE)
+TrainingDataIndex <- createDataPartition(training_fin$classe, p=0.7, list= FALSE)
+trainingData      <- training_fin[TrainingDataIndex,]
+testData          <- training_fin[-TrainingDataIndex,]
+```
+For each of the models, we train and test the model in a very similar fashion. The `train()` function tunes each of the algorithms on a few important (default) parameters and selects the best model best on accuracy. This model is trained by the complete `trainingData`. 
+```{r modeltesting, eval=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+# Naive Bayes
+model_nb <- train(classe~., data=trainingData, trControl=train_control, method="nb",metric='Accuracy')
+predicted_nb <- predict(model_nb,newdata = testData)
+cf_nb <- confusionMatrix(predicted_nb,testData$classe)
+cf_nb$overall[1]
+
+# Support Vector Machines (linear kernal is chosen due to the large number of predictors.)
+model_svm <- train(classe~., data=trainingData, trControl=train_control, method="svmLinear",metric='Accuracy')
+predicted_svm <- predict(model_svm,newdata = testData)
+cf_svm <- confusionMatrix(predicted_svm,testData$classe)
+cf_svm$overall[1]
+
+# Decision Tree
+model_rpart <- train(classe~., data=trainingData, trControl=train_control, method="rpart",metric='Accuracy')
+predicted_rpart <- predict(model_rpart,newdata = testData)
+cf_rpart <- confusionMatrix(predicted_rpart,testData$classe)
+cf_rpart$overall[1]
+
+# Random Forest
+model_rf <- train(classe~., data=trainingData, trControl=train_control, method="rf",metric='Accuracy')
+predicted_rf <- predict(model_rf,newdata = testData)
+cf_rf <- confusionMatrix(predicted_rf,testData$classe)
+cf_rf$overall[1]
+
+# Gradient Boosting
+model_gbm <- train(classe~., data=trainingData, trControl=train_control, method="gbm", verbose=FALSE,metric='Accuracy')
+predicted_gbm <- predict(model_gbm,newdata = testData)
+cf_gbm <- confusionMatrix(predicted_gbm,testData$classe)
+cf_gbm$overall[1]
+
+# K Nearest Neighbour 
+model_knn <- knn(train = trainingData[,-53], test = testData[,-53], cl = trainingData$class, k = 5)
+cm_knn <- confusionMatrix(model_knn,testData$classe)
+cm_knn$overall[1]
+
+```
+
+
+The random forest (rf) algorithm scored the highest with 99% accuracy. The ```train()``` function automatically performs some parameter tuning, and applies the best model to the complete data set. As the accuracy is already over 99% no further hyperparameter tuning or feature engineering is required. 
+```{r, eval=TRUE, cache=TRUE}
+model_rf
+cf_rf
+```
+A small improvement might be made by including the full trianing set in the final model:
+```{r, eval=TRUE, cache=TRUE}
+train_control_fin <- trainControl(method="none", savePredictions = "all")
+model_rf_final <- train(classe~., data=training_fin, trControl=train_control_fin, method="rf", tuneGrid = expand.grid(mtry = 27))
+
+```
+
+## Scoring test set with final model
+
+The final model will be applied to the test set in order to answer the assignment's quiz questions.
+```{r finalmodel, eval=TRUE, cache=TRUE}
+listcolumn <- colnames(training_fin)
+listcolumn <- listcolumn[!listcolumn %in% c("classe")]
+testing_fin <- testing[,listcolumn]
+
+predict(model_rf_final,testing_fin)
+
+```
+The out of sample error is expected to be 1-accuracy = 1%, based on the 10-fold cross validation test on the training set. The results on the final 20 cases is therefore expected to be completely correct.
